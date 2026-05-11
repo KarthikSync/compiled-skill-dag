@@ -76,6 +76,25 @@ No crash. No fake confidence. No invented control flow.
 
 Stdlib only. No `pip install` needed.
 
+## LLM provider
+
+The `diagnose` node optionally calls [OpenRouter](https://openrouter.ai). To enable:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+# optional — defaults to anthropic/claude-haiku-4.5
+export OPENROUTER_MODEL=anthropic/claude-haiku-4.5
+```
+
+Without `OPENROUTER_API_KEY`, or if the request fails, the node falls back to a deterministic stub and prints a one-line warning to stderr. Either way the gate's verdict is unchanged — the control-flow claim does not depend on which path produced the label.
+
+The artifact records which path ran:
+
+```json
+{ "source": "stub" }
+{ "source": "openrouter:anthropic/claude-haiku-4.5" }
+```
+
 ## Run it
 
 ```bash
