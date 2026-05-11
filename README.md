@@ -1,16 +1,61 @@
 # compiled-skill-dag
 
-A five-minute demo of one narrow claim:
+Tiny demo of one idea:
 
-> **Prompt-planned agents can choose invalid control flow; a compiled DAG
-> makes that class of error impossible by construction.**
+> Let the graph own control flow. Let the LLM reason inside the box.
 
-This demo addresses **control-flow hallucination only**, not reasoning
-hallucination. The LLM inside `diagnose` can still produce a wrong label —
-that is out of scope. What the DAG eliminates is the model's freedom to
-reorder stages, skip dependencies, or call a tool it shouldn't.
+Prompt-planned agents can do weird things. They can call tools in the wrong order, skip prerequisite evidence, or decide they are done before the workflow is actually valid.
 
-Stdlib only — no `pip install` needed.
+This repo shows the opposite pattern.
+
+The execution path is compiled into a small runtime DAG. The LLM only runs inside the `diagnose` node. It sees finished artifacts. It does not get tool handles. It cannot reorder the graph.
+
+This does not solve hallucination. The model can still write a bad diagnosis.
+
+It does remove one class of failure: **control-flow hallucination**.
+
+## The example
+
+We investigate a fake exception spike.
+
+The runtime does exactly this:
+
+```
+get_trend
+  -> get_stack
+  -> search_source
+  -> diagnose
+  -> gate_claim
+```
+
+Three mock tools exist:
+
+```
+telemetry.get_exception_trend
+telemetry.get_stack_sample
+source.search_symbol
+```
+
+Only `runner.py` can call them. The LLM cannot.
+
+## Why this matters
+
+In a prompt-planned agent, the model might say:
+
+```
+I'll search the source first.
+> source.search_symbol("HandleRequest")
+```
+
+But source search needs the top stack frame. No stack, no symbol. Wrong order.
+
+In the DAG version, that call is impossible. `search_source` has a dependency on `get_stack` and a `requires` check on `stack_packet.top_frame`. If the stack is missing, source search is skipped and the deterministic gate emits:
+
+```json
+{ "verdict": "blocked_missing" }
+```
+
+No crash. No fake confidence. No invented control flow.
 
 ## Layout
 
@@ -18,71 +63,34 @@ Stdlib only — no `pip install` needed.
 .
 ├── skill/
 │   ├── SKILL.md
-│   └── references/runtime_dag.json   # the five-node graph
+│   └── references/runtime_dag.json
 ├── tools/
-│   ├── telemetry.py                  # mock provider (canned data)
-│   └── source.py                     # mock provider (canned data)
+│   ├── telemetry.py
+│   └── source.py
 ├── fixtures/
-│   ├── good_case.json                # all three providers return data
-│   ├── missing_stack.json            # trend present, stack empty
-│   └── bad_prompt_baseline.txt       # canned prompt-planned transcript
-└── runner.py                         # DAG executor + transcript validator
+│   ├── good_case.json
+│   ├── missing_stack.json
+│   └── bad_prompt_baseline.txt
+└── runner.py
 ```
 
-The LLM never imports or calls a tool. Only `runner.py` does, and only at
-`kind: tool` nodes in the order the DAG specifies.
+Stdlib only. No `pip install` needed.
 
-## Artifact contract
-
-Every artifact written to `out/` carries an explicit `status`:
-
-| `status` | meaning |
-|---|---|
-| `ok` | the node ran and returned data |
-| `missing` | the node ran but the provider returned nothing |
-| `skipped` | the node did not run (its `requires` was unsatisfied) |
-
-The deterministic `gate_claim` node uses status (not file existence) to
-decide between `supported` and `blocked_missing`. Its rule is named in the
-DAG (`gate: all_required_packets_ok`) and looked up in a dispatch table —
-not free text.
-
-## Running
+## Run it
 
 ```bash
-# Run everything and assert verdicts (recommended).
+# All three at once, with assertions:
 python runner.py test
+```
 
-# Or run the three commands individually:
+Or one at a time.
+
+**Good case** — trend, stack, and source evidence all exist.
+
+```bash
 python runner.py run good_case.json
-python runner.py run missing_stack.json
-python runner.py validate fixtures/bad_prompt_baseline.txt
+cat out/claim.json
 ```
-
-`run` and `validate` both clear `out/*.json` first, so a stale `claim.json`
-from an earlier run never leaks into a later one.
-
-## Expected output
-
-### `python runner.py test`
-
-```
-ran   get_trend
-ran   get_stack
-ran   search_source
-ran   diagnose
-ran   gate_claim
-PASS  good_case.json: expected='supported' got='supported'
-ran   get_trend
-ran   get_stack
-skip  search_source: missing required 'stack_packet.top_frame'
-ran   diagnose
-ran   gate_claim
-PASS  missing_stack.json: expected='blocked_missing' got='blocked_missing'
-PASS  bad_prompt_baseline.txt: first='source_search_before_stack' errors=2
-```
-
-### `out/claim.json` — good case
 
 ```json
 {
@@ -93,47 +101,51 @@ PASS  bad_prompt_baseline.txt: first='source_search_before_stack' errors=2
 }
 ```
 
-### `out/claim.json` — missing-stack case
+**Missing-stack case** — trend exists, stack does not.
+
+```bash
+python runner.py run missing_stack.json
+cat out/claim.json
+```
 
 ```json
 {
   "verdict": "blocked_missing",
   "missing": ["source_packet", "stack_packet"],
-  "details": {
-    "stack_packet": "missing",
-    "source_packet": "skipped"
-  }
+  "details": { "stack_packet": "missing", "source_packet": "skipped" }
 }
 ```
 
-### Baseline transcript
+**Baseline transcript** — a prompt-planned agent calls source search before stack retrieval.
+
+```bash
+python runner.py validate fixtures/bad_prompt_baseline.txt
+```
 
 ```json
 {
-  "errors": 2,
+  "errors": 1,
   "first": "source_search_before_stack",
-  "all": ["source_search_before_stack", "stack_before_trend"]
+  "all": ["source_search_before_stack"]
 }
 ```
 
-## Acceptance criteria
+## What this proves
 
-| ID | Criterion | Enforced by |
-|---|---|---|
-| A1 | Refuse to run a node before its `depends_on` artifacts exist on disk | `check_depends` in `runner.py` |
-| A2 | `source.search_symbol` never runs without `stack_packet.top_frame` | `check_requires` + `requires:` in the DAG |
-| A3 | Missing stack → `claim.verdict = blocked_missing`, not a crash | `gate_all_required_packets_ok` |
-| A4 | The LLM cannot call tools directly | only `runner.py` imports the tool modules; `diagnose` reads finished artifacts |
-| A5 | Baseline transcript surfaces a named control-flow error | `validate_transcript` |
-| A6 | This README states the demo addresses control-flow hallucination only | the second paragraph |
+Prompt-planned agents can choose invalid control flow.
+A compiled DAG makes that class of error impossible by construction.
 
-## What's deliberately out of scope
+It does not prove:
 
-- The label inside `diagnosis` can be wrong (reasoning hallucination).
-- Real-tool failure modes (timeouts, partial responses, auth).
-- Multi-cycle state, transitions, notification dedup, fix proposals.
+- LLMs stop hallucinating
+- diagnoses are always correct
+- real MCP failures are handled
+- production agent orchestration is solved
 
-The point is reproducible by construction: we don't need probabilistic LLM
-failures to demonstrate that prompt-planned execution **can** pick
-`search_source` before `get_stack`. The validator scores the canned
-transcript against the DAG and reports the inversion every time.
+This is just the small core.
+
+The graph owns the path.
+The model reasons inside one node.
+The gate decides whether the result is admissible.
+
+That is the pattern.
