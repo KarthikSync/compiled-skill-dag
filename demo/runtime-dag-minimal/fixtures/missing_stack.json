@@ -1,0 +1,12 @@
+{
+  "telemetry": {
+    "trend": {
+      "exception_type": "TimeoutException",
+      "count_1h": 50,
+      "count_24h_baseline": 3,
+      "spike_factor": 16.6
+    },
+    "stack": null
+  },
+  "source": {}
+}

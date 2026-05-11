@@ -1,3 +1,6 @@
+# Runtime DAG demo outputs
+demo/runtime-dag-minimal/out/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
