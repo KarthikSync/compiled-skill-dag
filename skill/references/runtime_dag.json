@@ -1,0 +1,38 @@
+{
+  "nodes": [
+    {
+      "id": "get_trend",
+      "kind": "tool",
+      "tool": "telemetry.get_exception_trend",
+      "outputs": ["trend_packet"]
+    },
+    {
+      "id": "get_stack",
+      "kind": "tool",
+      "tool": "telemetry.get_stack_sample",
+      "depends_on": ["get_trend"],
+      "outputs": ["stack_packet"]
+    },
+    {
+      "id": "search_source",
+      "kind": "tool",
+      "tool": "source.search_symbol",
+      "depends_on": ["get_stack"],
+      "requires": ["stack_packet.top_frame"],
+      "outputs": ["source_packet"]
+    },
+    {
+      "id": "diagnose",
+      "kind": "llm",
+      "depends_on": ["get_trend", "get_stack", "search_source"],
+      "outputs": ["diagnosis"]
+    },
+    {
+      "id": "gate_claim",
+      "kind": "deterministic",
+      "depends_on": ["diagnose"],
+      "gate": "all_required_packets_ok",
+      "outputs": ["claim"]
+    }
+  ]
+}

@@ -2,14 +2,14 @@ A prompt-planned agent transcript. The agent picks its own tool order
 from the prompt and gets it wrong: it searches source before pulling a
 stack. There is nothing forcing it to do otherwise.
 
-Step 1: Exceptions are up. I'll search the source for the suspect function first.
+Step 1: Exceptions are up. Let me size the spike first.
+        > telemetry.get_exception_trend("1h")
+
+Step 2: I'll search the source for the suspect function.
         > source.search_symbol("HandleRequest")
         (no hit — but we wouldn't have known the right symbol without a stack)
 
-Step 2: Now let me grab a stack to confirm.
+Step 3: Better grab a stack to confirm.
         > telemetry.get_stack_sample("NullReferenceException")
-
-Step 3: And the trend, to size the spike.
-        > telemetry.get_exception_trend("1h")
 
 Step 4: Summarizing for the on-call channel...
