@@ -1,5 +1,5 @@
 # Runtime DAG demo outputs
-demo/runtime-dag-minimal/out/
+/out/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
