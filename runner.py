@@ -22,8 +22,11 @@ Subcommands:
 """
 import argparse
 import json
+import os
 import re
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from tools import source, telemetry
@@ -124,12 +127,12 @@ def run_tool_node(node, fixture):
             })
 
 
-def run_diagnose(_node, _fixture):
-    # Stand-in for the LLM: a real implementation calls a model here with
-    # the three packets as input and the label as structured output.
-    trend = load_artifact("trend_packet") or {}
-    stack = load_artifact("stack_packet") or {}
-    src = load_artifact("source_packet") or {}
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_MODEL = "anthropic/claude-haiku-4.5"
+ALLOWED_LABELS = ("likely_null_deref", "likely_throughput_regression", "unknown")
+
+
+def stub_diagnose(trend, stack, src):
     etype = (trend.get("exception_type") or "").lower()
     snippet = (src.get("snippet") or "").lower()
     if "null" in etype or ".find(" in snippet:
@@ -138,14 +141,82 @@ def run_diagnose(_node, _fixture):
         label = "likely_throughput_regression"
     else:
         label = "unknown"
+    summary = (
+        f"{trend.get('exception_type', 'unknown')} spiked "
+        f"{trend.get('spike_factor', '?')}x ({trend.get('count_1h', '?')} in 1h)."
+    )
+    return label, summary
+
+
+def call_openrouter(prompt, api_key, model):
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+    }
+    req = urllib.request.Request(
+        OPENROUTER_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        body = json.loads(resp.read())
+    content = body["choices"][0]["message"]["content"]
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", content, re.DOTALL)
+        if not m:
+            raise
+        return json.loads(m.group())
+
+
+def llm_diagnose(trend, stack, src):
+    prompt = (
+        "You are diagnosing an exception spike. Three evidence packets:\n\n"
+        f"trend_packet:  {json.dumps(trend)}\n"
+        f"stack_packet:  {json.dumps(stack)}\n"
+        f"source_packet: {json.dumps(src)}\n\n"
+        "Return ONLY a JSON object with two keys:\n"
+        f'  "label":   one of {list(ALLOWED_LABELS)}\n'
+        '  "summary": one sentence describing what spiked and by how much.\n'
+    )
+    api_key = os.environ["OPENROUTER_API_KEY"]
+    model = os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL)
+    result = call_openrouter(prompt, api_key, model)
+    label = result.get("label", "unknown")
+    if label not in ALLOWED_LABELS:
+        label = "unknown"
+    return label, str(result.get("summary", "")).strip()
+
+
+def run_diagnose(_node, _fixture):
+    trend = load_artifact("trend_packet") or {}
+    stack = load_artifact("stack_packet") or {}
+    src = load_artifact("source_packet") or {}
+    source_kind = "stub"
+    if os.environ.get("OPENROUTER_API_KEY"):
+        try:
+            label, summary = llm_diagnose(trend, stack, src)
+            source_kind = "openrouter:" + os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL)
+        except (urllib.error.URLError, KeyError, ValueError, TimeoutError) as e:
+            print(f"warn  diagnose: LLM call failed ({type(e).__name__}); "
+                  f"falling back to stub", file=sys.stderr)
+            label, summary = stub_diagnose(trend, stack, src)
+    else:
+        print("warn  diagnose: OPENROUTER_API_KEY not set; using deterministic stub",
+              file=sys.stderr)
+        label, summary = stub_diagnose(trend, stack, src)
     write_artifact("diagnosis", {
         "status": "ok",
+        "source": source_kind,
         "label": label,
         "top_frame": stack.get("top_frame"),
-        "summary": (
-            f"{trend.get('exception_type', 'unknown')} spiked "
-            f"{trend.get('spike_factor', '?')}x ({trend.get('count_1h', '?')} in 1h)."
-        ),
+        "summary": summary,
     })
 
 
