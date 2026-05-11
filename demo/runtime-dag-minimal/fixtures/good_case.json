@@ -1,0 +1,26 @@
+{
+  "telemetry": {
+    "trend": {
+      "exception_type": "NullReferenceException",
+      "count_1h": 142,
+      "count_24h_baseline": 8,
+      "spike_factor": 17.75
+    },
+    "stack": {
+      "exception_type": "NullReferenceException",
+      "top_frame": "OrderService.HandleRequest",
+      "frames": [
+        "OrderService.HandleRequest",
+        "OrderController.Process",
+        "Pipeline.Invoke"
+      ]
+    }
+  },
+  "source": {
+    "OrderService.HandleRequest": {
+      "file": "src/OrderService.cs",
+      "line": 42,
+      "snippet": "var customer = customers.Find(id);\nreturn customer.Name;"
+    }
+  }
+}
